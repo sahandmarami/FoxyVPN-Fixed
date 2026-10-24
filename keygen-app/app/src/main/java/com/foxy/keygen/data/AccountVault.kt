@@ -148,6 +148,33 @@ class AccountVault(context: Context) {
         if (activeEmail == current) activeEmail = real
     }
 
+    /**
+     * Finds which row owns [refreshToken]. Firefox rotates refresh tokens on
+     * every grant, and a renewal that lands after the user switched accounts
+     * used to be written into the *active* row — silently cross-wiring two
+     * accounts so switching only changed the label. Token writes are now
+     * identity-safe: renewed tokens always go back to the row whose refresh
+     * token produced the grant.
+     */
+    fun rowEmailForRefreshToken(refreshToken: String?): String? {
+        val rt = refreshToken?.trim().orEmpty()
+        if (rt.isBlank()) return null
+        return accounts.firstOrNull { it.refreshToken == rt }?.email
+    }
+
+    /**
+     * Persists the live [TokenStore] session back into the row that actually
+     * owns it (matched by the refresh token the grant was made with).
+     * [usedRefreshToken] == null means a fresh interactive login, whose row is
+     * created by the login flow itself — nothing to do here.
+     */
+    fun syncRefreshedTokens(usedRefreshToken: String?, tokenStore: TokenStore) {
+        if (loginInProgress) return
+        val owner = rowEmailForRefreshToken(usedRefreshToken) ?: return
+        val auth = tokenStore.loadAuth() ?: return
+        updateTokens(owner, auth)
+    }
+
     fun markBroken(email: String) {
         val email = email.trim().lowercase()
         if (email.isNotBlank()) brokenEmails.add(email)

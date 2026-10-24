@@ -3,9 +3,14 @@ package com.vauth.foxyvpn.data
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import org.json.JSONObject
+import java.net.InetSocketAddress
+import java.net.Proxy
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -22,6 +27,59 @@ import java.util.concurrent.atomic.AtomicBoolean
 object GistReporter {
 
     private const val TAG = "GistReporter"
+
+    /**
+     * Local SOCKS5 port of the running tunnel, or 0 when the VPN is down.
+     * The app excludes its own traffic from the tunnel, so control-plane
+     * requests normally leave through the raw ISP connection. From some
+     * networks (sanctioned/filtered routes) api.github.com refuses that, and
+     * then usage reporting, usage restore and revocation ALL silently die.
+     * When a tunnel is up we therefore send gist traffic through it first
+     * (loopback SOCKS -> edge -> GitHub) and fall back to the direct route.
+     */
+    @Volatile
+    var tunnelSocksPort: Int = 0
+
+    private var tunnelClient: OkHttpClient? = null
+    private var tunnelClientPort: Int = 0
+
+    private fun clientThroughTunnel(): OkHttpClient? {
+        val port = tunnelSocksPort
+        if (port <= 0) return null
+        val existing = tunnelClient
+        if (existing != null && tunnelClientPort == port) return existing
+        val built = ControlPlaneHttp.client.newBuilder()
+            .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port)))
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(25, TimeUnit.SECONDS)
+            .callTimeout(30, TimeUnit.SECONDS)
+            .build()
+        tunnelClient = built
+        tunnelClientPort = port
+        return built
+    }
+
+    /**
+     * Executes a gist request: through the tunnel when one is up, otherwise
+     * (or when that route fails) directly. Returns null only when both routes
+     * failed — the caller treats that as "offline" and retries later.
+     */
+    private fun execute(request: Request): Response? {
+        val viaTunnel = clientThroughTunnel()
+        if (viaTunnel != null) {
+            try {
+                return viaTunnel.newCall(request).execute()
+            } catch (e: Exception) {
+                AppLogger.d(TAG, "gist request via tunnel failed, falling back to direct: ${e.message}")
+            }
+        }
+        return try {
+            ControlPlaneHttp.client.newCall(request).execute()
+        } catch (e: Exception) {
+            AppLogger.d(TAG, "gist request failed on both routes: ${e.message}")
+            null
+        }
+    }
 
     data class RegistryEntry(
         val id: String,
@@ -51,6 +109,8 @@ object GistReporter {
         /** True when the registry answered and contained this key. */
         val present: Boolean,
         val reported: Boolean,
+        /** Usage another device (or an earlier session) last reported — for resuming. */
+        val reportedUsedBytes: Long = 0L,
     )
 
     /**
@@ -91,7 +151,14 @@ object GistReporter {
             }
             val reported = patchUsage(gist.second, ctx, usedBytes, status)
             if (!reported) AppLogger.d(TAG, "gist sync: usage patch failed (will retry)")
-            SyncResult(revoked = revoked, present = present, reported = reported)
+            val reportedUsed = gist.second.optJSONObject("usages")
+                ?.optJSONObject(ctx.keyId)?.optLong("used", 0L) ?: 0L
+            SyncResult(
+                revoked = revoked,
+                present = present,
+                reported = reported,
+                reportedUsedBytes = reportedUsed,
+            )
         } finally {
             inFlight.set(false)
         }
@@ -181,7 +248,7 @@ object GistReporter {
             .header("User-Agent", "FoxyVPN-Key")
             .get()
             .build()
-        ControlPlaneHttp.client.newCall(request).execute().use { resp ->
+        execute(request)?.use { resp ->
             if (resp.code != 200) return null
             val body = runCatching { JSONObject(resp.body?.string().orEmpty()) }.getOrNull() ?: return null
             val files = body.optJSONObject("files") ?: return null
@@ -189,6 +256,7 @@ object GistReporter {
             val usage = fileContent(files, "usage.json", ghToken)?.let { runCatching { JSONObject(it) }.getOrNull() }
             return Pair(registry ?: JSONObject(), usage ?: JSONObject().put("usages", JSONObject()))
         }
+        return null
     }
 
     private fun fileContent(files: JSONObject, name: String, ghToken: String): String? {
@@ -199,7 +267,7 @@ object GistReporter {
             if (url.isNotBlank()) {
                 val req = Request.Builder().url(url)
                     .header("Authorization", "Bearer $ghToken").header("User-Agent", "FoxyVPN-Key").get().build()
-                ControlPlaneHttp.client.newCall(req).execute().use { r ->
+                execute(req)?.use { r ->
                     if (r.code == 200) r.body?.string() else null
                 }
             } else {
@@ -220,8 +288,9 @@ object GistReporter {
             .header("User-Agent", "FoxyVPN-Key")
             .patch(payload.toString().toRequestBody("application/json".toMediaType()))
             .build()
-        ControlPlaneHttp.client.newCall(request).execute().use { resp ->
+        execute(request)?.use { resp ->
             return resp.code in 200..299
         }
+        return false
     }
 }

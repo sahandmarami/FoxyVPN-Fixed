@@ -226,7 +226,8 @@ private suspend fun activateKey(app: FoxyVpnApp, rawKey: String): Result<Unit> {
 
     app.activatedKeyStore.saveKey(key)
     UsageAccountant.attach(app.activatedKeyStore, key)
-    // resume the friend's previous consumption (survives logout/reinstall)
-    UsageAccountant.seedFromGistAsync()
+    // one registry round trip: restores the friend's previous consumption
+    // (survives logout/reinstall) and immediately learns about revocations
+    UsageAccountant.refreshFromRegistryAsync()
     return Result.success(Unit)
 }

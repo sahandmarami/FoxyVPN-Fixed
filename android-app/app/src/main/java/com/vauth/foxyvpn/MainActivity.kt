@@ -14,6 +14,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.navigation.compose.rememberNavController
+import com.vauth.foxyvpn.data.UsageAccountant
 import com.vauth.foxyvpn.ui.navigation.FoxyNavGraph
 import com.vauth.foxyvpn.ui.theme.FoxyVpnTheme
 import com.vauth.foxyvpn.ui.theme.rememberThemeController
@@ -67,6 +68,14 @@ class MainActivity : ComponentActivity() {
         if (!alreadyGranted) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // the app is on screen: check the registry once right away so a key
+        // the distributor revoked (or re-enabled) shows its true state even
+        // while the VPN is disconnected
+        UsageAccountant.refreshFromRegistryAsync()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

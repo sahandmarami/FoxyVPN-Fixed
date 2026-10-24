@@ -55,8 +55,13 @@ class FxaAuthRepository(
     private val challengeSolver: FastlyChallengeSolver = FastlyChallengeSolver(ControlPlaneHttp.cookieJar),
 ) {
 
-    /** Fired whenever the live session tokens change (login / refresh grant). */
-    var onAuthSaved: (() -> Unit)? = null
+    /**
+     * Fired whenever the live session tokens change. The parameter is the
+     * refresh token the grant was made with (null for interactive logins), so
+     * the multi-account vault can write renewed tokens back to the row that
+     * actually owns them instead of whatever row happens to be active.
+     */
+    var onAuthSaved: ((usedRefreshToken: String?) -> Unit)? = null
 
     /**
      * Firefox rotates the refresh token on every refresh grant, so two
@@ -65,8 +70,8 @@ class FxaAuthRepository(
      */
     private val refreshMutex = Mutex()
 
-    private fun notifyAuthSaved() {
-        runCatching { onAuthSaved?.invoke() }
+    private fun notifyAuthSaved(usedRefreshToken: String? = null) {
+        runCatching { onAuthSaved?.invoke(usedRefreshToken) }
     }
     var pendingSessionToken: String?
         get() = tokenStore.pendingSessionToken
@@ -166,6 +171,7 @@ class FxaAuthRepository(
                 "The stored session has no refresh token; sign in again.",
                 permanent = true,
             )
+        val usedRefreshToken = refreshToken
 
         val body = JSONObject().apply {
             put("client_id", FIREFOX_CLIENT_ID)
@@ -205,7 +211,7 @@ class FxaAuthRepository(
         )
         runCatching { tokenStore.saveAuth(renewed) }
             .onFailure { AppLogger.w(TAG, "could not persist the renewed token", it) }
-        notifyAuthSaved()
+        notifyAuthSaved(usedRefreshToken)
         return@withLock renewed
     }
 
@@ -245,7 +251,7 @@ class FxaAuthRepository(
                 expiresAtEpochSeconds = expiryFrom(tokenData),
             ),
         )
-        notifyAuthSaved()
+        notifyAuthSaved(usedRefreshToken = null)
         clearPendingSession()
     }
 

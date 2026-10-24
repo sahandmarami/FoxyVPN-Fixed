@@ -28,6 +28,12 @@ object UsageAccountant {
         private set
     @Volatile private var reporterContext: GistReporter.ReportContext? = null
 
+    /** Last registry round trip: did it answer? Set by [refreshFromRegistryAsync]/service ticks. */
+    @Volatile var lastRegistrySyncOk: Boolean = false
+        private set
+    @Volatile var lastRegistrySyncAtMs: Long = 0L
+        private set
+
     fun attach(activatedKeyStore: ActivatedKeyStore, quotaKey: QuotaKey?) {
         store = activatedKeyStore
         key = quotaKey
@@ -66,6 +72,55 @@ object UsageAccountant {
         }
     }
 
+    /**
+     * One combined round trip against the registry that works even while the
+     * VPN is off: learns about revocations (or re-activations), reports the
+     * local usage and restores the counter from whatever the gist last saw.
+     * Runs at app start, after key activation and whenever the UI returns to
+     * the foreground — so a revoked key shows its banner immediately instead
+     * of "working" until the next connect.
+     */
+    fun refreshFromRegistryAsync() {
+        val ctx = reporterContext ?: return
+        if (store == null) return
+        scope.launch {
+            val sync = runCatching {
+                GistReporter.sync(
+                    ctx = ctx,
+                    usedBytes = usedBytes.get(),
+                    limitBytes = limit,
+                    expired = blockReason == BlockReason.EXPIRED,
+                )
+            }.getOrNull()
+            lastRegistrySyncAtMs = System.currentTimeMillis()
+            if (sync == null) {
+                lastRegistrySyncOk = false
+                return@launch
+            }
+            lastRegistrySyncOk = true
+            when {
+                sync.revoked || !sync.present -> {
+                    if (!sync.present) {
+                        AppLogger.w("UsageAccountant", "registry no longer lists this key; treating as revoked")
+                    }
+                    markRevoked()
+                }
+                sync.present -> {
+                    clearRevocation()
+                    if (sync.reportedUsedBytes > usedBytes.get()) {
+                        ingestExternalUsed(sync.reportedUsedBytes)
+                    }
+                }
+            }
+        }
+    }
+
+    /** Called by the VPN service after each supervision tick. */
+    fun noteRegistrySync(success: Boolean) {
+        lastRegistrySyncOk = success
+        lastRegistrySyncAtMs = System.currentTimeMillis()
+    }
+
     fun reset() {
         store = null
         key = null
@@ -73,6 +128,8 @@ object UsageAccountant {
         lastNativeTotal.set(-1L)
         usedBytes.set(0L)
         blockReason = BlockReason.NONE
+        lastRegistrySyncOk = false
+        lastRegistrySyncAtMs = 0L
     }
 
     fun keyAttached(): Boolean = key != null

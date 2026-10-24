@@ -54,8 +54,9 @@ class FoxyVpnApp : Application() {
         // possible so the VPN service and the UI agree on the same counter
         val storedKey = runCatching { activatedKeyStore.loadKey() }.getOrNull()
         UsageAccountant.attach(activatedKeyStore, storedKey)
-        // pull the last reported usage so the counter always resumes
-        UsageAccountant.seedFromGistAsync()
+        // pull the last reported usage + revocation state so the counter
+        // always resumes and a revoked key is flagged before any connect
+        UsageAccountant.refreshFromRegistryAsync()
         createNotificationChannel()
     }
 

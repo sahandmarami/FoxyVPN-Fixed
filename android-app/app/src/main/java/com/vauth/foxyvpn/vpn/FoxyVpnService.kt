@@ -649,6 +649,9 @@ class FoxyVpnService : VpnService() {
             }
             socks.start()
             socksServer = socks
+            // gist traffic (usage report / revocation check) rides the tunnel
+            // while it is up; falls back to the direct route when not
+            GistReporter.tunnelSocksPort = socksPort
 
             if (httpProxyEnabled) {
                 val http = LocalHttpProxyServer(
@@ -1181,6 +1184,7 @@ class FoxyVpnService : VpnService() {
         socksServer = null
         httpProxyServer = null
         upstreamSession = null
+        GistReporter.tunnelSocksPort = 0
         return detached
     }
 
@@ -1224,6 +1228,7 @@ class FoxyVpnService : VpnService() {
                             }.onFailure {
                                 AppLogger.d(TAG, "gist sync failed this tick: ${it.message}")
                             }.getOrNull()
+                            UsageAccountant.noteRegistrySync(sync != null)
                             if (sync?.revoked == true || (sync != null && !sync.present)) {
                                 // revoked, or dropped from the registry entirely
                                 if (sync != null && !sync.present) {

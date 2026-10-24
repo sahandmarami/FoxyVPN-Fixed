@@ -451,13 +451,23 @@ private fun AccountQuotaCard(app: KeygenApp, accountsVersion: Int, switchError: 
     }
 
     LaunchedEffect(activeEmail) {
+        // this loop belongs to ONE account: if the user switches away, the
+        // loop exits instead of writing the old account's numbers over the
+        // new account's card
+        val myEmail = activeEmail
+        maxBytes = null
+        remaining = null
+        resetAt = null
+        err = false
         var first = true
         while (true) {
+            if (app.accountVault.activeAccount()?.email != myEmail) break
             app.accountVault.syncActiveFrom(app.tokenStore)
             val token = runCatching { app.authRepository.currentAccessToken() }.getOrNull()
             if (token != null) {
                 runCatching { app.guardianClient.fetchAccountOverview(KeygenApp.GUARDIAN_ENDPOINT, token) }
                     .onSuccess { info ->
+                        if (app.accountVault.activeAccount()?.email != myEmail) return@onSuccess
                         maxBytes = info.maxBytes
                         remaining = info.quotaRemaining
                         resetAt = info.quotaReset
@@ -465,7 +475,7 @@ private fun AccountQuotaCard(app: KeygenApp, accountsVersion: Int, switchError: 
                         // the active row may still carry a placeholder label —
                         // resolve its real e-mail once and merge duplicates
                         val active = app.accountVault.activeAccount()
-                        if (active != null && active.pendingIdentity) {
+                        if (active != null && active.email == myEmail && active.pendingIdentity) {
                             val real = fetchFxaProfileEmail(token)
                             if (!real.isNullOrBlank()) {
                                 app.accountVault.applyRealEmail(active.email, real)
@@ -474,7 +484,7 @@ private fun AccountQuotaCard(app: KeygenApp, accountsVersion: Int, switchError: 
                     }
                     .onFailure {
                         // a dead session means this account must be re-added
-                        err = true
+                        if (app.accountVault.activeAccount()?.email == myEmail) err = true
                     }
             } else if (first) {
                 err = true
@@ -730,8 +740,18 @@ private fun IssueTab(app: KeygenApp, accountsVersion: Int) {
                         busy = true; error = null; issuedKey = null
                         scope.launch {
                             try {
+                                // keys minted without a connected registry carry no
+                                // gist coordinates: they can never report usage and
+                                // can never be revoked — refuse to make them
+                                if (!app.gistRegistry.isReady) {
+                                    throw Exception(
+                                        "اول «اتصال گزارش زنده (گیت‌هاب)» را انجام دهید؛ " +
+                                            "بدون آن باطل‌کردن کلید و گزارش مصرف کار نمی‌کند",
+                                    )
+                                }
                                 app.accountVault.syncActiveFrom(app.tokenStore)
                                 val refreshToken = app.tokenStore.loadAuth()?.refreshToken
+                                    ?: app.accountVault.activeAccount()?.refreshToken
                                     ?: throw Exception("نشست فایرفاکس یافت نشد؛ دوباره وارد شوید")
                                 val sizeValue = sizeText.toLongOrNull()?.coerceAtLeast(1L)
                                 if (!unlimited && sizeValue == null) throw Exception("حجم را درست وارد کنید")
@@ -755,7 +775,12 @@ private fun IssueTab(app: KeygenApp, accountsVersion: Int) {
                                     githubToken = app.gistRegistry.githubToken,
                                     privateKeyB64 = BuildConfig.FOXY_PRIVATE_KEY,
                                 )
-                                if (!QuotaKeyCodec.verifySelf(key)) throw Exception("خودآزمایی امضا ناموفق بود")
+                                if (!QuotaKeyCodec.verifySelf(key)) {
+                                    throw Exception(
+                                        "خودآزمایی امضا ناموفق بود — کلید امضای این نسخه با کلید عمومی " +
+                                            "برنامهٔ اصلی هم‌خوانی ندارد",
+                                    )
+                                }
                                 app.gistRegistry.addKey(
                                     GistRegistry.KeyRow(
                                         id = extractId(key), name = name.trim().ifBlank { "کاربر" },

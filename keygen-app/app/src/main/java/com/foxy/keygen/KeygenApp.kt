@@ -21,7 +21,12 @@ class KeygenApp : Application() {
         accountVault = AccountVault(this)
         accountVault.migrateLegacySession(tokenStore)
         authRepository = FxaAuthRepository(tokenStore).apply {
-            onAuthSaved = { accountVault.syncActiveFrom(tokenStore) }
+            // renewed tokens always return to the row whose refresh token
+            // produced the grant — this is what keeps multi-account switching
+            // from cross-wiring two accounts
+            onAuthSaved = { usedRefreshToken ->
+                accountVault.syncRefreshedTokens(usedRefreshToken, tokenStore)
+            }
         }
         guardianClient = GuardianClient()
         gistRegistry = GistRegistry(this)

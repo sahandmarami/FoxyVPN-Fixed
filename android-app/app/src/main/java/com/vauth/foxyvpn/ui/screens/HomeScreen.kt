@@ -503,6 +503,34 @@ private fun AccountCard(
                 )
             }
 
+            // registry heartbeat: makes the revocation/usage channel visible
+            // instead of silently failing somewhere in the background
+            if (UsageAccountant.reporterContext() != null) {
+                var syncOk by remember { mutableStateOf<Boolean?>(null) }
+                LaunchedEffect(Unit) {
+                    while (true) {
+                        syncOk = if (UsageAccountant.lastRegistrySyncAtMs == 0L) null
+                        else UsageAccountant.lastRegistrySyncOk
+                        delay(5_000L)
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    when (syncOk) {
+                        null -> "بررسی وضعیت کلید: در انتظار اولین همگام‌سازی…"
+                        true -> "بررسی وضعیت کلید: متصل ✓ (باطل‌سازی تا نیم دقیقه اعمال می‌شود)"
+                        false -> "بررسی وضعیت کلید: ناموفق — اتصال اینترنت را بررسی کنید"
+                    },
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = when (syncOk) {
+                        true -> Color(0xFF128A56)
+                        false -> Color(0xFFB57A00)
+                        else -> Color(0xFF97A1AC)
+                    },
+                )
+            }
+
             val planBytes = planGb * QuotaKeyPayload.BYTES_PER_GB + planMb * QuotaKeyPayload.BYTES_PER_MB
             if (planBytes > 0) {
                 Spacer(Modifier.height(12.dp))

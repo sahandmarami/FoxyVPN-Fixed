@@ -44,6 +44,17 @@ object QuotaKeyCodec {
         privateKeyB64: String,
     ): String {
         require(privateKeyB64.isNotBlank()) { "کلید امضا در این نسخه تعبیه نشده است" }
+        val priv = Base64.decode(privateKeyB64, Base64.NO_WRAP)
+        // fail early with a clear reason when the embedded signing key does
+        // not match the public key the FoxyVPN client verifies with — the old
+        // generic "self-check failed" gave no hint about the real cause
+        val derivedPublic = Ed25519PrivateKeyParameters(priv, 0).generatePublicKey()
+        val expectedPublic = Ed25519PublicKeyParameters(Base64.decode(PUB_B64, Base64.NO_WRAP), 0)
+        if (!derivedPublic.getEncoded().contentEquals(expectedPublic.getEncoded())) {
+            throw IllegalStateException(
+                "کلید امضای این نسخه با کلید عمومی برنامهٔ اصلی هم‌خوانی ندارد (signing-key.sec را بررسی کنید)",
+            )
+        }
         val payload = QuotaKeyPayload(
             v = 1,
             name = name,
@@ -57,7 +68,6 @@ object QuotaKeyCodec {
         )
         val payloadJson = json.encodeToString(QuotaKeyPayload.serializer(), payload)
         val payloadB64 = b64urlEncode(payloadJson.toByteArray(Charsets.UTF_8))
-        val priv = Base64.decode(privateKeyB64, Base64.NO_WRAP)
         val signer = Ed25519Signer()
         signer.init(true, Ed25519PrivateKeyParameters(priv, 0))
         signer.update(payloadB64.toByteArray(Charsets.US_ASCII), 0, payloadB64.length)

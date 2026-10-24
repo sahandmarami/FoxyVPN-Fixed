@@ -17,7 +17,9 @@ object FaFormat {
     )
 
     fun faDigits(n: Long): String = buildString {
-        for (ch in n.toString()) append(if (ch in '0'..'9') ('۰'.code + (ch - '0')) else ch)
+        for (ch in n.toString()) {
+            append(if (ch in '0'..'9') ('۰'.code + (ch - '0')).toChar() else ch)
+        }
     }
 
     fun faDigits(n: Int): String = faDigits(n.toLong())
@@ -52,7 +54,8 @@ object FaFormat {
 
     /**
      * Human "time left on the key" with the granularity the user asked for:
-     * days while days remain, hours while hours remain, minutes at the end.
+     * days while days remain, hours while hours remain, minutes at the end —
+     * never the mixed "X روز و Y ساعت" shape.
      */
     fun remainingLabel(expiresAtEpochSec: Long, nowMillis: Long): String {
         val remainingMs = expiresAtEpochSec * 1000L - nowMillis
@@ -62,27 +65,19 @@ object FaFormat {
         val hours = (totalMinutes % (60L * 24L)) / 60L
         val minutes = totalMinutes % 60L
         return when {
-            days >= 1 && hours >= 1 -> "${faDigits(days)} روز و ${faDigits(hours)} ساعت"
             days >= 1 -> "${faDigits(days)} روز"
-            hours >= 1 && minutes >= 1 -> "${faDigits(hours)} ساعت و ${faDigits(minutes)} دقیقه"
             hours >= 1 -> "${faDigits(hours)} ساعت"
             else -> "${faDigits(minutes.coerceAtLeast(1))} دقیقه"
         }
     }
 
-    /** "شارژ دوبارهٔ حجم: X روز دیگر" for the monthly volume recharge. */
+    /** Only the number of days left until the monthly volume is re-granted. */
     fun quotaResetLabel(resetAtEpochSec: Long, nowMillis: Long): String {
         val remainingMs = resetAtEpochSec * 1000L - nowMillis
         if (remainingMs <= 0L) return "حجم ماهانه تازه شد ✓"
-        val totalMinutes = remainingMs / 60_000L
-        val days = totalMinutes / (60L * 24L)
-        val hours = (totalMinutes % (60L * 24L)) / 60L
-        val minutes = totalMinutes % 60L
-        return when {
-            days >= 1 && hours >= 1 -> "شارژ دوبارهٔ حجم: ${faDigits(days)} روز و ${faDigits(hours)} ساعت دیگر"
-            days >= 1 -> "شارژ دوبارهٔ حجم: ${faDigits(days)} روز دیگر"
-            hours >= 1 -> "شارژ دوبارهٔ حجم: ${faDigits(hours)} ساعت دیگر"
-            else -> "شارژ دوبارهٔ حجم: ${faDigits(minutes.coerceAtLeast(1))} دقیقه دیگر"
-        }
+        val days = (remainingMs + DAY_MS - 1L) / DAY_MS // rounded up, at least 1
+        return "شارژ دوبارهٔ حجم: ${faDigits(days)} روز دیگر"
     }
+
+    private const val DAY_MS = 86_400_000L
 }
